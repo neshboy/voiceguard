@@ -1,0 +1,25 @@
+{
+  "name": "voiceguard",
+  "version": "0.1.0",
+  "description": "Local, offline CLI that runs heuristic digital-signal-processing checks on a WAV file to flag acoustic patterns associated with synthetic/cloned speech. NOT a certified deepfake detector.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "voiceguard": "./bin/voiceguard.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "analyze": "tsx src/cli.ts analyze"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.2",
+    "vitest": "^1.6.0"
+  }
+}
