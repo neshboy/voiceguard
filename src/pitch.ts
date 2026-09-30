@@ -3,13 +3,33 @@
  * statistics derived from the frame-to-frame F0 and amplitude track.
  *
  * Autocorrelation pitch detection: for a windowed frame, compute the
- * signal's autocorrelation at lags corresponding to plausible human pitch
- * periods (default ~60-500 Hz), pick the lag with the strongest normalized
- * autocorrelation peak (the periodicity that best "explains" the frame), and
+ * signal's normalized cross-correlation at lags corresponding to plausible
+ * human pitch periods (default ~60-500 Hz), pick the lag with the strongest
+ * normalized peak (the periodicity that best "explains" the frame), and
  * convert that lag to a frequency. This is a well-known, legitimately
  * implementable-from-scratch pitch estimator (closely related to the
- * classic autocorrelation method / RAPT-style approaches), not a novel or
- * exotic algorithm.
+ * classic autocorrelation method / RAPT/YIN-style approaches), not a novel
+ * or exotic algorithm.
+ *
+ * Each lag's cross-correlation is normalized by the energy of the two
+ * overlapping sub-frames it actually compares (sqrt(energy(x[0..n-lag]) *
+ * energy(x[lag..n]))), not by the fixed full-frame energy -- normalizing by
+ * full-frame energy would bias the search toward short lags, since a
+ * shorter overlap has proportionally less energy relative to that fixed
+ * denominator. Each lag's raw cross-correlation and normalized value are
+ * memoized as they're computed during the search loop, so the parabolic
+ * interpolation step immediately below it can reuse bestLag-1/bestLag+1
+ * instead of recomputing those O(n) sums a second time.
+ *
+ * (An FFT-based O(n log n) cross-correlation via the Wiener-Khinchin
+ * theorem was evaluated here and rejected: benchmarking showed it made
+ * per-frame cost *worse* in practice than this brute-force O(n * lagRange)
+ * loop, because the existing from-scratch fft.ts recomputes its
+ * sin/cos twiddle factors on every butterfly of every call with no caching
+ * across the many same-size per-frame FFTs, and calls fft() twice per
+ * frame. A genuine algorithmic speedup would need a twiddle-cached FFT
+ * variant (or a different fast-correlation approach), which is a design
+ * decision for the maintainer rather than a mechanical fix.)
  *
  * Jitter (cycle-to-cycle F0 variability) and shimmer (cycle-to-cycle
  * amplitude variability) are standard voice-quality measures used in
@@ -70,19 +90,37 @@ export function estimateFrameF0(
   const maxLag = Math.min(n - 1, Math.ceil(sampleRate / minHz));
   if (minLag >= maxLag) return null;
 
-  // r0: zero-lag autocorrelation (signal energy), used for normalization.
-  let r0 = 0;
-  for (let i = 0; i < n; i++) r0 += centered[i]! * centered[i]!;
-  if (r0 <= 0) return null;
+  // Cumulative sum of squares: cumsq[i] = sum of centered[0..i). Lets us get
+  // the energy of any sub-segment in O(1), needed to normalize each lag by
+  // the energy of the two sub-frames it actually overlaps (see below).
+  const cumsq = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) cumsq[i + 1] = cumsq[i]! + centered[i]! * centered[i]!;
+  if (cumsq[n]! <= 0) return null;
+
+  // normalizedAt() computes (and memoizes) the normalized cross-correlation
+  // for a given lag: raw cross-correlation divided by the energy of the two
+  // overlapping sub-frames it actually compares (sqrt(energy(x[0..n-lag]) *
+  // energy(x[lag..n]))), not the fixed full-frame energy. Results are cached
+  // per lag so the parabolic-interpolation step below can reuse
+  // bestLag-1/bestLag+1 instead of recomputing those O(n) sums again.
+  const normalizedCache = new Float64Array(maxLag + 2).fill(NaN);
+  const normalizedAt = (lag: number): number => {
+    const cached = normalizedCache[lag]!;
+    if (!Number.isNaN(cached)) return cached;
+    let sum = 0;
+    for (let i = 0; i < n - lag; i++) sum += centered[i]! * centered[i + lag]!;
+    const energyA = cumsq[n - lag]!; // energy of centered[0 .. n-lag)
+    const energyB = cumsq[n]! - cumsq[lag]!; // energy of centered[lag .. n)
+    const denom = Math.sqrt(energyA * energyB);
+    const normalized = denom > 0 ? sum / denom : -Infinity;
+    normalizedCache[lag] = normalized;
+    return normalized;
+  };
 
   let bestLag = -1;
   let bestValue = -Infinity;
   for (let lag = minLag; lag <= maxLag; lag++) {
-    let sum = 0;
-    for (let i = 0; i < n - lag; i++) {
-      sum += centered[i]! * centered[i + lag]!;
-    }
-    const normalized = sum / r0;
+    const normalized = normalizedAt(lag);
     if (normalized > bestValue) {
       bestValue = normalized;
       bestLag = lag;
@@ -94,14 +132,12 @@ export function estimateFrameF0(
   }
 
   // Parabolic interpolation around the best lag for sub-sample precision.
-  const lagFor = (lag: number): number => {
-    let sum = 0;
-    for (let i = 0; i < n - lag; i++) sum += centered[i]! * centered[i + lag]!;
-    return sum / r0;
-  };
-  const yPrev = bestLag > minLag ? lagFor(bestLag - 1) : bestValue;
+  // normalizedAt() hits the cache for bestLag-1/bestLag+1 (already computed
+  // while scanning the search range above), so this no longer re-runs the
+  // O(n) correlation sum a second time.
+  const yPrev = bestLag > minLag ? normalizedAt(bestLag - 1) : bestValue;
   const yCurr = bestValue;
-  const yNext = bestLag < maxLag ? lagFor(bestLag + 1) : bestValue;
+  const yNext = bestLag < maxLag ? normalizedAt(bestLag + 1) : bestValue;
   const denom = yPrev - 2 * yCurr + yNext;
   const shift = denom !== 0 ? (0.5 * (yPrev - yNext)) / denom : 0;
   const refinedLag = bestLag + Math.max(-1, Math.min(1, shift));

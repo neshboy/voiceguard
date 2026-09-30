@@ -11,6 +11,7 @@
  * produce fairly regular pauses, so this must not be treated as proof.
  */
 
+import { coefficientOfVariation } from "./stats.js";
 import type { PausePatternResult, SilenceSegment } from "./types.js";
 
 export interface SilenceDetectionOptions {
@@ -86,16 +87,6 @@ function pushSegment(
   if (durationSeconds >= minPauseDurationSeconds) {
     segments.push({ startSeconds, endSeconds, durationSeconds });
   }
-}
-
-function coefficientOfVariation(values: number[]): number | null {
-  if (values.length < 2) return null;
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  if (mean <= 0) return null;
-  const variance =
-    values.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) / values.length;
-  const stddev = Math.sqrt(variance);
-  return stddev / mean;
 }
 
 export function analyzePausePattern(
