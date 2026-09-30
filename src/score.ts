@@ -9,6 +9,7 @@
 import { analyzeSpectralFrames } from "./spectral.js";
 import { computeJitterShimmer, trackPitch } from "./pitch.js";
 import { analyzePausePattern } from "./silence.js";
+import { coefficientOfVariation, mean } from "./stats.js";
 import type { AnalysisResult, DecodedWav, FeatureScore } from "./types.js";
 import { DISCLAIMER } from "./disclaimer.js";
 
@@ -26,25 +27,6 @@ function inverseThresholdScore(
   if (value >= highAnchor) return 0;
   const t = (value - lowAnchor) / (highAnchor - lowAnchor);
   return 100 * (1 - t);
-}
-
-function mean(values: number[]): number {
-  if (values.length === 0) return 0;
-  return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
-function stddev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const m = mean(values);
-  const variance = values.reduce((acc, v) => acc + (v - m) * (v - m), 0) / values.length;
-  return Math.sqrt(variance);
-}
-
-function coefficientOfVariation(values: number[]): number | null {
-  if (values.length < 2) return null;
-  const m = mean(values);
-  if (m <= 0) return null;
-  return stddev(values) / m;
 }
 
 export interface ScoringOptions {
